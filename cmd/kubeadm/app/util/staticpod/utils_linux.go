@@ -61,6 +61,14 @@ func RunComponentAsNonRoot(componentName string, pod *v1.Pod, usersAndGroups *us
 			usersAndGroups.Groups.ID(kubeadmconstants.KubeControllerManagerUserName),
 			users.UpdatePathOwnerAndPermissions,
 		)
+	case kubeadmconstants.Etcd:
+		return runEtcdAsNonRoot(
+			pod,
+			usersAndGroups.Users.ID(kubeadmconstants.EtcdUserName),
+			usersAndGroups.Groups.ID(kubeadmconstants.EtcdUserName),
+			users.UpdatePathOwnerAndPermissions,
+			cfg,
+		)
 	}
 	return errors.New(fmt.Sprintf("component name %q is not valid", componentName))
 }
@@ -143,6 +151,31 @@ func runKubeControllerManagerAsNonRoot(pod *v1.Pod, runAsUser, runAsGroup, suppl
 func runKubeSchedulerAsNonRoot(pod *v1.Pod, runAsUser, runAsGroup *int64, updatePathOwnerAndPermissions pathOwerAndPermissionsUpdaterFunc) error {
 	kubeconfigFile := filepath.Join(kubeadmconstants.KubernetesDir, kubeadmconstants.SchedulerKubeConfigFileName)
 	if err := updatePathOwnerAndPermissions(kubeconfigFile, *runAsUser, *runAsGroup, 0600); err != nil {
+		return err
+	}
+	pod.Spec.Containers[0].SecurityContext = &v1.SecurityContext{
+		AllowPrivilegeEscalation: pointer.Bool(false),
+		// We drop all capabilities that are added by default.
+		Capabilities: &v1.Capabilities{
+			Drop: []v1.Capability{"ALL"},
+		},
+	}
+	pod.Spec.SecurityContext.RunAsUser = runAsUser
+	pod.Spec.SecurityContext.RunAsGroup = runAsGroup
+	return nil
+}
+
+// runEtcdAsNonRoot updates the pod manifest and the hostVolume permissions to run etcd as non root.
+func runEtcdAsNonRoot(pod *v1.Pod, runAsUser, runAsGroup *int64, updatePathOwnerAndPermissions pathOwerAndPermissionsUpdaterFunc, cfg *kubeadmapi.ClusterConfiguration) error {
+	if err := updatePathOwnerAndPermissions(cfg.Etcd.Local.DataDir, *runAsUser, *runAsGroup, 0700); err != nil {
+		return err
+	}
+	etcdServerKeyFile := filepath.Join(cfg.CertificatesDir, kubeadmconstants.EtcdServerKeyName)
+	if err := updatePathOwnerAndPermissions(etcdServerKeyFile, *runAsUser, *runAsGroup, 0600); err != nil {
+		return err
+	}
+	etcdPeerKeyFile := filepath.Join(cfg.CertificatesDir, kubeadmconstants.EtcdPeerKeyName)
+	if err := updatePathOwnerAndPermissions(etcdPeerKeyFile, *runAsUser, *runAsGroup, 0600); err != nil {
 		return err
 	}
 	pod.Spec.Containers[0].SecurityContext = &v1.SecurityContext{
